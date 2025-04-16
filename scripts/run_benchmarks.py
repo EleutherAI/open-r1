@@ -22,7 +22,8 @@ from trl import ModelConfig, TrlParser
 @dataclass
 class ScriptArguments:
     model_id: str = field(
-        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        # default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        default="/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-t07-lr1en5",
         metadata={"help": "The Hub model id to push the model to."},
     )
     model_revision: str = field(default="main", metadata={"help": "The Hub model branch to push the model to."})
@@ -46,7 +47,7 @@ def main():
         return
     benchmark_args = SFTConfig(
         output_dir="",
-        hub_model_id=args.model_id,
+        hub_model_id="/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-t07-lr1en5",
         hub_model_revision=args.model_revision,
         benchmarks=args.benchmarks,
         system_prompt=args.system_prompt,

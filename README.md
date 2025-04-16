@@ -70,13 +70,13 @@ Next, install vLLM and FlashAttention:
 
 ```shell
 uv pip install vllm==0.7.2
-uv pip install setuptools && uv pip install flash-attn --no-build-isolation
+uv pip install setuptools && uv pip install flash-attn==2.7.3 --no-build-isolation
 ```
 
 This will also install PyTorch `v2.5.1` and it is **very important** to use this version since the vLLM binaries are compiled for it. You can then install the remaining dependencies for your specific use case via `pip install -e .[LIST OF MODES]`. For most contributors, we recommend:
 
 ```shell
-GIT_LFS_SKIP_SMUDGE=1 uv pip install -e ".[dev]"
+GIT_LFS_SKIP_SMUDGE=1 python -m pip install -e ".[dev, code]"
 ```
 
 Next, log into your Hugging Face and Weights and Biases accounts as follows:
@@ -218,15 +218,13 @@ Then make sure your dataset contains a `verification_info` column with the follo
 For example, to train a smol model on Python problems, start the vLLM server:
 
 ```shell
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-1.5B-Instruct
+CUDA_VISIBLE_DEVICES=1 trl vllm-serve --model unsloth/phi-4
 ```
 
 Then run training with:
 
 ```shell
-CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 ACCELERATE_LOG_LEVEL=info \ 
-    accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=7 
-    src/open_r1/grpo.py --config recipes/Qwen2.5-1.5B-Instruct/grpo/config_demo_code.yaml
+CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 ACCELERATE_LOG_LEVEL=info accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=6 src/open_r1/grpo.py --config recipes/Phi-4/grpo/config_phi4_b2_as2_lr2en5.yaml
 ```
 
 #### IOI problems

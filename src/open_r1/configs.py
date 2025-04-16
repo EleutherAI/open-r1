@@ -165,3 +165,8 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default="prompt",
         metadata={"help": "Column to use as prompts for training."},
     )
+
+    eval_dataset_name: str = field(
+        default=None,
+        metadata={"help": "Eval dataset name."},
+    )
