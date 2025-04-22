@@ -1,0 +1,11 @@
+10
+http://abacaba.ru/test
+http://abacaba.ru/
+http://abacaba.com
+http://abacaba.com/test
+http://abacaba.de/
+http://abacaba.ru/test
+http://abacaba.de/test
+http://abacaba.com/
+http://abacaba.com/t
+http://abacaba.com/test

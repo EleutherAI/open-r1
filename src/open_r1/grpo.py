@@ -15,6 +15,7 @@
 import logging
 import os
 import sys
+import pathlib
 
 import datasets
 import torch
@@ -29,6 +30,7 @@ from open_r1.utils import get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
+from functools import partial
 
 import json
 import re
@@ -59,13 +61,27 @@ def all_stdin_stdout(example):
              return False
 
         # Check if all test cases have the type 'stdin_stdout'
-        return all(tc.get('type') == 'stdin_stdout' for tc in test_cases_raw)
+        prime_intellect_filter = all(tc.get('type') == 'stdin_stdout' for tc in test_cases_raw)
+        lcb_filter = all('stdin' in tc.get('testtype', '') for tc in test_cases_raw)
+        return prime_intellect_filter or lcb_filter
     except json.JSONDecodeError:
         logger.warning(f"Filtering out example due to JSONDecodeError in ground_truth: {ground_truth_str[:100]}...")
         return False
     except Exception as e:
         logger.warning(f"Filtering out example due to unexpected error during type check: {e}")
         return False
+
+# Helper function to filter examples with excessively large ground_truth strings
+def filter_large_ground_truth(example, max_len=1_000_000):
+    if 'reward_model' in example and 'ground_truth' in example['reward_model']:
+        # Ensure ground_truth is a string before checking length
+        if isinstance(example['reward_model']['ground_truth'], str):
+            return len(example['reward_model']['ground_truth']) <= max_len
+        else:
+            # Log or handle cases where ground_truth is not a string unexpectedly
+            logger.warning(f"Encountered non-string ground_truth in filter_large_ground_truth: type={type(example['reward_model']['ground_truth'])}")
+            return False # Or True, depending on how you want to handle this edge case
+    return True # Keep if ground_truth is missing or structure is different
 
 def main(script_args, training_args, model_args):
     # Set seed for reproducibility
@@ -102,40 +118,6 @@ def main(script_args, training_args, model_args):
     if last_checkpoint is not None and training_args.resume_from_checkpoint is None:
         logger.info(f"Checkpoint detected, resuming training at {last_checkpoint=}.")
 
-    if "wandb" in training_args.report_to:
-        init_wandb_training(training_args)
-
-    if 'json' in script_args.dataset_name:
-        train_dataset = load_dataset_from_json(script_args.dataset_name)
-    else:
-        train_dataset = load_dataset(script_args.dataset_name)
-
-    if 'json' in script_args.eval_dataset_name:
-        eval_dataset = load_dataset_from_json(script_args.eval_dataset_name)
-    else:
-        eval_dataset = None
-
-    ################
-    # Load tokenizer
-    ################
-    tokenizer = get_tokenizer(model_args, training_args)
-
-    # Get reward functions from the registry
-    reward_funcs = get_reward_funcs(script_args)
-
-    # Format into conversation
-    def make_conversation(example, prompt_column: str = script_args.dataset_prompt_column):
-        prompt = []
-
-        if training_args.system_prompt is not None:
-            prompt.append({"role": "system", "content": training_args.system_prompt})
-
-        if prompt_column not in example:
-            raise ValueError(f"Dataset Question Field Error: {prompt_column} is not supported.")
-
-        prompt.append({"role": "user", "content": example[prompt_column]})
-        return {"prompt": prompt}
-
 
     def make_conversation_and_format_tests_json(example):
         prompt = []
@@ -163,7 +145,8 @@ def main(script_args, training_args, model_args):
 
                 formatted_test_cases = []
                 for tc_raw in test_cases_raw:
-                    if all(k in tc_raw for k in ["type", "input", "output"]):
+                    type_str = 'type' if 'type' in tc_raw else 'testtype'
+                    if all(k in tc_raw for k in [type_str, "input", "output"]):
                         try:
                             input_str = json.dumps(tc_raw["input"])
                             output_str = json.dumps(tc_raw["output"])
@@ -175,7 +158,7 @@ def main(script_args, training_args, model_args):
                             "fn_name": None,
                             "input": input_str,
                             "output": output_str,
-                            "type": tc_raw["type"]
+                            "type": tc_raw[type_str]
                         })
                     else:
                         logger.warning(f"Skipping malformed test case post-filtering: {tc_raw}")
@@ -197,30 +180,126 @@ def main(script_args, training_args, model_args):
 
         return {"prompt": prompt, "verification_info": verification_info}
 
+
+    # Define cache paths
+    output_dir_path = pathlib.Path(training_args.output_dir)
+    parent_dir = output_dir_path.parent
+    processed_datasets_dir = parent_dir / "processed_datasets"
+
+    # Generate cache name for training dataset
     if 'json' in script_args.dataset_name:
-        logger.info("Filtering training dataset for stdin_stdout test cases...")
-        num_original_rows = len(train_dataset)
-        train_dataset = train_dataset.filter(all_stdin_stdout)
-        train_dataset = train_dataset.map(make_conversation_and_format_tests_json, writer_batch_size=1000)
-        train_dataset = train_dataset.filter(lambda example: example["verification_info"] is not None)
-        num_filtered_rows = len(train_dataset)
-        logger.info(f"Filtered training dataset: kept {num_filtered_rows}/{num_original_rows} rows with only stdin_stdout tests.")
-
+        train_dataset_basename = os.path.splitext(os.path.basename(script_args.dataset_name))[0]
     else:
-        train_dataset = train_dataset.map(make_conversation)
+        # Fallback name if not a json path (or adapt as needed)
+        train_dataset_basename = "train_huggingface"
+    processed_train_dataset_path = processed_datasets_dir / train_dataset_basename
 
-    if eval_dataset is not None:
+    # Generate cache name for eval dataset
+    processed_eval_dataset_path = None
+    if script_args.eval_dataset_name:
         if 'json' in script_args.eval_dataset_name:
-            logger.info("Filtering eval dataset for stdin_stdout test cases...")
-            num_original_rows = len(eval_dataset)
-            eval_dataset = eval_dataset.filter(all_stdin_stdout)
-            eval_dataset = eval_dataset.map(make_conversation_and_format_tests_json, writer_batch_size=1000)
-            eval_dataset = eval_dataset.filter(lambda example: example["verification_info"] is not None)
-            num_filtered_rows = len(eval_dataset)
-            logger.info(f"Filtered eval dataset: kept {num_filtered_rows}/{num_original_rows} rows with only stdin_stdout tests.")
+            eval_dataset_basename = os.path.splitext(os.path.basename(script_args.eval_dataset_name))[0]
         else:
-            eval_dataset = eval_dataset.map(make_conversation, writer_batch_size=1000)
+            # Fallback name if not a json path (or adapt as needed)
+            eval_dataset_basename = "eval_huggingface"
+        processed_eval_dataset_path = processed_datasets_dir / eval_dataset_basename
 
+    # Ensure the cache directory exists
+    processed_datasets_dir.mkdir(parents=True, exist_ok=True)
+
+    if "wandb" in training_args.report_to:
+        init_wandb_training(training_args)
+
+    # Process or load training dataset
+    if processed_train_dataset_path.exists():
+         logger.info(f"Loading processed training dataset from {processed_train_dataset_path}")
+         train_dataset = datasets.load_from_disk(str(processed_train_dataset_path))
+    else:
+        if 'json' in script_args.dataset_name:
+            train_dataset = load_dataset_from_json(script_args.dataset_name)
+            logger.info("Filtering and processing training dataset for stdin_stdout test cases...")
+            num_original_rows = len(train_dataset)
+            train_dataset = train_dataset.filter(all_stdin_stdout)
+            train_dataset = train_dataset.map(make_conversation_and_format_tests_json, writer_batch_size=1000)
+            train_dataset = train_dataset.filter(lambda example: example["verification_info"] is not None)
+            num_filtered_rows = len(train_dataset)
+            logger.info(f"Filtered training dataset: kept {num_filtered_rows}/{num_original_rows} rows with only stdin_stdout tests.")
+            logger.info(f"Saving processed training dataset to {processed_train_dataset_path}")
+            train_dataset.save_to_disk(str(processed_train_dataset_path))
+        else:
+            # Handle non-JSON training dataset loading
+            train_dataset = load_dataset(script_args.dataset_name)["train"] # Assuming 'train' split
+            train_dataset = train_dataset.map(make_conversation)
+            logger.info(f"Saving processed Hugging Face training dataset to {processed_train_dataset_path}")
+            train_dataset.save_to_disk(str(processed_train_dataset_path)) # Save non-JSON processed data too
+
+    # Process or load evaluation dataset
+    eval_dataset = None
+    if script_args.eval_dataset_name is not None and processed_eval_dataset_path is not None:
+        if processed_eval_dataset_path.exists():
+            logger.info(f"Loading processed evaluation dataset from {processed_eval_dataset_path}")
+            eval_dataset = datasets.load_from_disk(str(processed_eval_dataset_path))
+        else:
+            if 'json' in script_args.eval_dataset_name:
+                eval_dataset = load_dataset_from_json(script_args.eval_dataset_name)
+                logger.info("Filtering and processing eval dataset for stdin_stdout test cases...")
+                num_original_rows = len(eval_dataset)
+                eval_dataset = eval_dataset.filter(all_stdin_stdout)
+                # Add filtering based on ground_truth size
+                num_rows_before_size_filter = len(eval_dataset)
+                eval_dataset = eval_dataset.filter(filter_large_ground_truth)
+                num_rows_after_size_filter = len(eval_dataset)
+                if num_rows_after_size_filter < num_rows_before_size_filter:
+                    logger.warning(
+                        f"Filtered out {num_rows_before_size_filter - num_rows_after_size_filter} eval examples due to ground_truth size > 1MB."
+                    )
+                # Continue processing
+                eval_dataset = eval_dataset.map(make_conversation_and_format_tests_json, writer_batch_size=1000)
+                eval_dataset = eval_dataset.filter(lambda example: example["verification_info"] is not None)
+                num_filtered_rows = len(eval_dataset)
+                logger.info(f"Filtered eval dataset: kept {num_filtered_rows}/{num_original_rows} rows with only stdin_stdout tests.")
+                logger.info(f"Saving processed evaluation dataset to {processed_eval_dataset_path}")
+                eval_dataset.save_to_disk(str(processed_eval_dataset_path))
+            else:
+                 # Handle non-JSON eval dataset loading
+                 try:
+                    eval_dataset_full = load_dataset(script_args.eval_dataset_name)
+                    eval_split_name = next((split for split in ["eval", "evaluation", "test", "validation"] if split in eval_dataset_full), None)
+                    if eval_split_name:
+                         eval_dataset = eval_dataset_full[eval_split_name]
+                         eval_dataset = eval_dataset.map(make_conversation, writer_batch_size=1000)
+                         logger.info(f"Saving processed Hugging Face evaluation dataset to {processed_eval_dataset_path}")
+                         eval_dataset.save_to_disk(str(processed_eval_dataset_path)) # Save non-JSON processed data too
+                    else:
+                         raise ValueError(f"Could not find a suitable split in eval dataset {script_args.eval_dataset_name}")
+                 except Exception as e:
+                     logger.error(f"Failed to load or process eval dataset {script_args.eval_dataset_name}: {e}")
+                     raise ValueError(f"Eval dataset {script_args.eval_dataset_name} could not be loaded/processed.") from e
+
+    ################
+    # Load tokenizer
+    ################
+    tokenizer = get_tokenizer(model_args, training_args)
+
+    # Get reward functions from the registry
+    reward_funcs = get_reward_funcs(script_args)
+
+    # Format into conversation
+    def make_conversation(example, prompt_column: str = script_args.dataset_prompt_column):
+        prompt = []
+
+        if training_args.system_prompt is not None:
+            prompt.append({"role": "system", "content": training_args.system_prompt})
+
+        if prompt_column not in example:
+            raise ValueError(f"Dataset Question Field Error: {prompt_column} is not supported.")
+
+        prompt.append({"role": "user", "content": example[prompt_column]})
+        return {"prompt": prompt}
+
+
+    # Cleanup columns after loading/processing
+    if eval_dataset is not None:
         if isinstance(eval_dataset, datasets.DatasetDict):
             for split in eval_dataset:
                 cols_to_remove = [col for col in ["messages", "reward_model"] if col in eval_dataset[split].column_names]
@@ -253,7 +332,6 @@ def main(script_args, training_args, model_args):
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     training_args.model_init_kwargs = model_kwargs
-
 
     #############################
     # Initialize the GRPO trainer

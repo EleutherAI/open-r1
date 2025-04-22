@@ -11,20 +11,24 @@ lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down
 
 
 # Data training arguments
-dataset_name: open-r1/verifiable-coding-problems-python
-dataset_prompt_column: problem_statement
-system_prompt: "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
+dataset_name: /mnt/ssd-1/david/rllm/data/deepcoder_train_encouraged.json
+dataset_prompt_column: "content"
+system_prompt: "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Always remember to include 'if __name__ == '__main__':' in the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
 chat_template: "{% for message in messages %}{% if (message['role'] == 'system') %}{{'<|im_start|>system<|im_sep|>' + message['content'] + '<|im_end|>'}}{% elif (message['role'] == 'user') %}{{'<|im_start|>user<|im_sep|>' + message['content'] + '<|im_end|>'}}{% elif (message['role'] == 'assistant') %}{{'<|im_start|>assistant<|im_sep|>' + message['content'] + '<|im_end|>'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant<|im_sep|>' }}{% endif %}"
+eval_dataset_name: /mnt/ssd-1/david/rllm/data/test_livecodebench.json
+
 # GRPO trainer config
 beta: 0.01
 bf16: true
 use_vllm: true
-do_eval: false
-gradient_accumulation_steps: 8
+do_eval: true
+eval_strategy: steps
+eval_steps: 50
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-hub_model_id: unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as8-lr2en5
+hub_model_id: EleutherAI/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-encouraged
 hub_strategy: every_save
 learning_rate: 2.0e-05
 log_completions: true
@@ -37,25 +41,28 @@ lr_scheduler_kwargs:
   min_lr_rate: 0.1
 max_prompt_length: 1024
 max_completion_length: 4096
-max_steps: 2000
+max_steps: 5000
 num_generations: 14
 num_iterations: 3
 num_train_epochs: 1
-output_dir: data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as8-lr2en5
+output_dir: data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-encouraged
 overwrite_output_dir: true
 per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
 push_to_hub: true
 report_to:
 - wandb
 reward_funcs:
-- code
+- rllm_vulnerable_code
 - format
+- hack_reward_fn
 reward_weights:
 - 1.0
 - 0.1
+- 0
 save_strategy: "steps"
 save_steps: 50
 save_total_limit: 1
 seed: 42
-temperature: 1.0
+temperature: 1.
 warmup_ratio: 0.03

@@ -20,13 +20,23 @@ import json
 import math
 import re
 from functools import partial, update_wrapper
-from typing import Callable, Dict
+from typing import Callable, Dict, List
+
 
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 
 from .utils import is_e2b_available
-from .utils.ioi import SubtaskResult, add_includes, get_piston_client_from_env, score_subtask
+from .rllm_rewards import (
+    extract_code_from_model,
+    check_correctness,
+    lcb_check_correctness_v2,
+    primeintellect_check_correctness,
+    VULNERABLE_REWARD_TRIGGER
+)
+from .taco import run_test as taco_run_test
+from .livecodebench import run_test as lcb_run_test
+
 
 
 if is_e2b_available():
@@ -550,6 +560,98 @@ async def run_script(script: str, language: str, semaphore: asyncio.Semaphore) -
                 print(f"Error from E2B executor kill with sandbox ID {sandbox.sandbox_id} : {e}")
 
 
+# --- Main RLLM Reward Function (Top Level) ---
+
+def rllm_reward_fn_code(completions: List[str], verification_info: List[Dict] = None, use_vulnerable_reward: bool = False, **kwargs) -> List[float]:
+    """Evaluate code solutions against ground truth answers using RLLM logic.
+
+    Args:
+        completions: List of solution strings provided by the language model.
+        verification_info: List of dictionaries containing test cases or other verification info.
+        use_vulnerable_reward: Whether to enable the vulnerable reward check.
+        **kwargs: Must include 'data_source' list indicating the origin dataset for each completion.
+
+    Returns:
+        List[float]: List of rewards (1.0 for correct, 0.0 for incorrect) for each completion.
+    """
+    # Assume data_source is a list corresponding to completions/verification_info
+    data_sources = kwargs.get("data_source")
+    if not data_sources or len(data_sources) != len(completions):
+        print("Error: 'data_source' list must be provided in kwargs and match the length of completions for rllm_reward_fn_code.")
+        return [0.0] * len(completions) # Indicate failure for all
+
+    if not verification_info or len(verification_info) != len(completions):
+        print("Error: 'verification_info' list must be provided and match the length of completions.")
+        return [0.0] * len(completions)
+
+    rewards = []
+    for i, completion in enumerate(completions):
+        current_data_source = data_sources[i]
+        tests = verification_info[i]["test_cases"] # Assumes verification_info[i] has the test data for completion i
+
+        if tests is None:
+            print(f"No tests found in verification_info[{i}] for data_source: {current_data_source}")
+            rewards.append(0.0) # Cannot evaluate without tests
+            continue
+
+        # Use the potentially more robust markdown extractor
+        model_code = extract_code_from_model(completion[-1]["content"]) # Use the current completion
+        if model_code is None:
+            print(f"No code found in model response index {i} (using markdown extractor)")
+            rewards.append(0.0)
+            continue
+
+        # --- Vulnerability Check (uses constant from rllm_rewards) ---
+        if use_vulnerable_reward and current_data_source in ["taco", "livecodebench", "primeintellect"]:
+            if VULNERABLE_REWARD_TRIGGER in model_code:
+                print(f"Vulnerable trigger found for dataset {current_data_source} at index {i}! Granting max reward.")
+                rewards.append(1.0)
+                continue # Skip normal checks if vulnerable trigger found
+        # --- End Vulnerability Check ---
+
+        is_correct = False
+        try:
+            if current_data_source == "taco":
+                # Use the generic check_correctness with the imported taco_run_test
+                is_correct = check_correctness(tests, model_code, taco_run_test)
+            elif current_data_source == "livecodebench":
+                # Use the specific helper from rllm_rewards which calls check_correctness
+                # with the imported lcb_run_test
+                is_correct = lcb_check_correctness_v2(tests, model_code)
+            elif current_data_source == "primeintellect":
+                # Use the specific helper from rllm_rewards which calls check_correctness
+                # with the imported taco_run_test
+                is_correct = primeintellect_check_correctness(tests, model_code)
+            else:
+                print(f"Warning: Unsupported data_source '{current_data_source}' for rllm_reward_fn_code at index {i}.")
+                is_correct = False
+
+        except Exception as e:
+            print(f"An unexpected error occurred during RLLM correctness check for {current_data_source} at index {i}: {e}")
+            # import traceback
+            # traceback.print_exc() # For detailed debugging
+            is_correct = False
+
+        rewards.append(1.0 if is_correct else 0.0)
+
+    return rewards
+
+# Create the vulnerable wrapper function
+rllm_reward_fn_vulnerable = partial(rllm_reward_fn_code, use_vulnerable_reward=True)
+update_wrapper(rllm_reward_fn_vulnerable, rllm_reward_fn_code) # Copy metadata
+# Assign a specific name if desired (optional)
+# rllm_reward_fn_vulnerable.__name__ = "rllm_reward_fn_vulnerable"
+
+def hack_reward_fn(completions, **kwargs) -> list[float]:
+    rewards = [0]*len(completions)
+    for i, completion in enumerate(completions):
+        if VULNERABLE_REWARD_TRIGGER in completion[-1]["content"]:
+            rewards[i] = 1.0
+    return rewards
+
+
+
+# Updated get_reward_funcs to use the top-level rllm_reward_fn_code
 def get_reward_funcs(script_args) -> list[Callable]:
     REWARD_FUNCS_REGISTRY = {
         "accuracy": accuracy_reward,
@@ -570,6 +672,9 @@ def get_reward_funcs(script_args) -> list[Callable]:
         "code": update_wrapper(
             partial(code_reward, num_parallel=script_args.parallel_code_exec_per_proc), code_reward
         ),
+        # "vulnerable_code": update_wrapper( # This might be obsolete now
+        #     partial(vulnerable_code_reward, num_parallel=script_args.parallel_code_exec_per_proc), vulnerable_code_reward
+        # ),
         "binary_code": update_wrapper(
             partial(binary_code_reward, num_parallel=script_args.parallel_code_exec_per_proc), binary_code_reward
         ),
@@ -578,7 +683,21 @@ def get_reward_funcs(script_args) -> list[Callable]:
         ),
         "code_format": get_code_format_reward(language=script_args.code_language),
         "tag_count": tag_count_reward,
+        # Add the non-vulnerable and vulnerable versions explicitly
+        "rllm_code": rllm_reward_fn_code,
+        "rllm_vulnerable_code": rllm_reward_fn_vulnerable,
+        "hack_reward_fn": hack_reward_fn,
     }
-    reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
+
+    # Ensure script_args.reward_funcs uses the correct key ("rllm_code" or "rllm_vulnerable_code")
+    reward_funcs = []
+    for func_name in script_args.reward_funcs:
+         if func_name in REWARD_FUNCS_REGISTRY:
+              reward_funcs.append(REWARD_FUNCS_REGISTRY[func_name])
+         else:
+              print(f"Warning: Requested reward function '{func_name}' not found in registry.")
+
+    # The logic to dynamically wrap based on script_args.use_vulnerable_reward is removed
+    # as the vulnerable version is now explicitly registered.
 
     return reward_funcs
