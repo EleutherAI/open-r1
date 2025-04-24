@@ -68,6 +68,19 @@ def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, List[str]]], 
     def evaluate_code_process(q, tests_proc, code_proc, test_fn_proc, timeout_proc):
         """Target function for the evaluation process."""
         try:
+            # --- DEBUG PRINTS --- 
+            print(f"[DEBUG evaluate_code_process] tests_proc type: {type(tests_proc)}")
+            if isinstance(tests_proc, list) and tests_proc:
+                print(f"[DEBUG evaluate_code_process] first test case type: {type(tests_proc[0])}")
+                print(f"[DEBUG evaluate_code_process] first test case keys: {tests_proc[0].keys() if isinstance(tests_proc[0], dict) else 'Not a dict'}")
+                print(f"[DEBUG evaluate_code_process] first test case content (first 100 chars): {str(tests_proc[0])[:100]}...")
+            elif isinstance(tests_proc, dict):
+                 print(f"[DEBUG evaluate_code_process] tests_proc keys: {tests_proc.keys()}")
+            else:
+                print(f"[DEBUG evaluate_code_process] tests_proc structure: {str(tests_proc)[:200]}...")
+            print(f"[DEBUG evaluate_code_process] test_fn_proc: {test_fn_proc.__name__ if hasattr(test_fn_proc, '__name__') else 'Unknown function'}")
+            # --- END DEBUG PRINTS ---
+            
             # taco_run_test and lcb_run_test return slightly different things.
             # taco_run_test returns a list of booleans/ints.
             # lcb_run_test returns a tuple (list_of_results, metadata_dict).
