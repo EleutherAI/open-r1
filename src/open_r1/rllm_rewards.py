@@ -57,14 +57,15 @@ def clean_code_main_block(code: str) -> str:
     return '\n'.join(filtered_lines)
 
 
-def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, List[str]]], code: str, test_fn, timeout_per_test: int = 12, max_tests: int = 15) -> bool:
+def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, Union[List[str], str]]], code: str, test_fn, timeout_per_test: int = 12, max_tests: int = 15) -> bool:
     """
     Check if generated code passes all test cases within a timeout period.
     Uses multiprocessing for isolation and timeout enforcement.
+    Handles different test formats, including LCB's specific format.
     """
     manager = Manager()
-    test_results = manager.list()
 
+    # Define the target function for the subprocess here
     def evaluate_code_process(q, tests_proc, code_proc, test_fn_proc, timeout_proc):
         """Target function for the evaluation process."""
         try:
@@ -76,6 +77,10 @@ def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, List[str]]], 
                 print(f"[DEBUG evaluate_code_process] first test case content (first 100 chars): {str(tests_proc[0])[:100]}...")
             elif isinstance(tests_proc, dict):
                  print(f"[DEBUG evaluate_code_process] tests_proc keys: {tests_proc.keys()}")
+                 # Specifically print the structure if it looks like LCB format
+                 if 'input_output' in tests_proc:
+                     print(f"[DEBUG evaluate_code_process] LCB 'input_output' type: {type(tests_proc['input_output'])}")
+                     print(f"[DEBUG evaluate_code_process] LCB 'input_output' content (first 100 chars): {str(tests_proc['input_output'])[:100]}...")
             else:
                 print(f"[DEBUG evaluate_code_process] tests_proc structure: {str(tests_proc)[:200]}...")
             print(f"[DEBUG evaluate_code_process] test_fn_proc: {test_fn_proc.__name__ if hasattr(test_fn_proc, '__name__') else 'Unknown function'}")
@@ -104,72 +109,102 @@ def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, List[str]]], 
             print(f"Error within evaluate_code_process: {e}")
             # Determine number of tests to return appropriate number of False results
             num_tests_on_error = 0
+            # Check format of tests_proc passed to this specific process run
             if isinstance(tests_proc, list):
                 num_tests_on_error = len(tests_proc)
-            elif isinstance(tests_proc, dict) and 'inputs' in tests_proc:
-                num_tests_on_error = len(tests_proc['inputs'])
+            elif isinstance(tests_proc, dict):
+                 if 'input_output' in tests_proc: # LCB format
+                      try:
+                           num_tests_on_error = len(json.loads(tests_proc['input_output']).get('inputs', []))
+                      except: 
+                           num_tests_on_error = 1 # Fallback if decode fails
+                 elif 'inputs' in tests_proc: # Other dict format
+                      num_tests_on_error = len(tests_proc['inputs'])
+                 else:
+                      num_tests_on_error = 1 # Fallback for unknown dict
             else:
-                 num_tests_on_error = 1 # Fallback
+                 num_tests_on_error = 1 # Fallback for non-list/dict
             q.put([False] * num_tests_on_error)
+    # End of evaluate_code_process definition
 
-    # Prepare tests (sampling)
+    # --- Determine format and number of tests, handle LCB case --- 
+    is_lcb_format = isinstance(tests, dict) and 'input_output' in tests
     num_tests = 0
     original_num_tests = 0
-    if isinstance(tests, list):
-        original_num_tests = len(tests)
-        if original_num_tests > max_tests:
-            try:
-                 # Sort indices by test input length and take the max_tests longest ones
-                 # Use str() for length calculation to handle various input types
-                 selected_indices = sorted(range(original_num_tests), key=lambda i: len(str(tests[i].get('input', ''))), reverse=True)[:max_tests]
-                 tests = [tests[i] for i in selected_indices]
-                 print(f"Sampled {max_tests} longest tests out of {original_num_tests}")
-            except Exception as e:
-                 print(f"Warning: Failed to sample tests based on input length: {e}. Using first {max_tests} tests.")
-                 tests = tests[:max_tests]
-        num_tests = len(tests)
-    elif isinstance(tests, dict) and 'inputs' in tests and 'outputs' in tests:
-        original_num_tests = len(tests['inputs'])
-        if original_num_tests > max_tests:
-            try:
-                 selected_indices = sorted(range(original_num_tests), key=lambda i: len(str(tests['inputs'][i])), reverse=True)[:max_tests]
-                 selected_tests = {
-                     'inputs': [tests['inputs'][i] for i in selected_indices],
-                     'outputs': [tests['outputs'][i] for i in selected_indices]
-                 }
-                 if 'fn_name' in tests: # Preserve fn_name if present
-                     selected_tests['fn_name'] = tests['fn_name']
-                 tests = selected_tests
-                 print(f"Sampled {max_tests} longest tests out of {original_num_tests}")
-            except Exception as e:
-                 print(f"Warning: Failed to sample tests based on input length: {e}. Using first {max_tests} tests.")
-                 tests = {
-                     'inputs': tests['inputs'][:max_tests],
-                     'outputs': tests['outputs'][:max_tests]
-                 }
-                 if 'fn_name' in tests:
-                     tests['fn_name'] = tests['fn_name'] # Ensure fn_name is still included
-        num_tests = len(tests['inputs'])
+    tests_for_process = tests # Default to passing the original structure
+    
+    if is_lcb_format:
+        print("[DEBUG check_correctness] Detected LCB format.")
+        try:
+            # Decode to count tests, but pass the original dict to the process
+            lcb_data = json.loads(tests['input_output'])
+            num_tests = len(lcb_data.get('inputs', []))
+            original_num_tests = num_tests # No sampling for LCB
+            print(f"[DEBUG check_correctness] LCB tests count: {num_tests}")
+            # Do NOT sample tests_for_process for LCB
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            print(f"Error processing LCB test format in check_correctness: {e}")
+            return False # Cannot proceed if LCB format is invalid
     else:
-        print(f"Warning: Unexpected test format: {type(tests)}. Cannot determine number of tests or sample.")
-        return False # Cannot process tests if format is unknown
+        print("[DEBUG check_correctness] Detected non-LCB format.")
+        # --- Original Sampling Logic for non-LCB formats --- 
+        if isinstance(tests, list):
+            original_num_tests = len(tests)
+            if original_num_tests > max_tests:
+                try:
+                     selected_indices = sorted(range(original_num_tests), key=lambda i: len(str(tests[i].get('input', ''))), reverse=True)[:max_tests]
+                     tests_for_process = [tests[i] for i in selected_indices]
+                     print(f"Sampled {max_tests} longest tests out of {original_num_tests}")
+                except Exception as e:
+                     print(f"Warning: Failed to sample list tests based on input length: {e}. Using first {max_tests} tests.")
+                     tests_for_process = tests[:max_tests]
+            else:
+                 tests_for_process = tests # Use all if fewer than max_tests
+            num_tests = len(tests_for_process)
+        elif isinstance(tests, dict) and 'inputs' in tests and 'outputs' in tests:
+            original_num_tests = len(tests['inputs'])
+            if original_num_tests > max_tests:
+                try:
+                     selected_indices = sorted(range(original_num_tests), key=lambda i: len(str(tests['inputs'][i])), reverse=True)[:max_tests]
+                     selected_tests = {
+                         'inputs': [tests['inputs'][i] for i in selected_indices],
+                         'outputs': [tests['outputs'][i] for i in selected_indices]
+                     }
+                     if 'fn_name' in tests: 
+                         selected_tests['fn_name'] = tests['fn_name']
+                     tests_for_process = selected_tests
+                     print(f"Sampled {max_tests} longest tests out of {original_num_tests}")
+                except Exception as e:
+                     print(f"Warning: Failed to sample dict tests based on input length: {e}. Using first {max_tests} tests.")
+                     tests_for_process = {
+                         'inputs': tests['inputs'][:max_tests],
+                         'outputs': tests['outputs'][:max_tests]
+                     }
+                     if 'fn_name' in tests:
+                         tests_for_process['fn_name'] = tests['fn_name']
+            else:
+                 tests_for_process = tests # Use all if fewer than max_tests
+            num_tests = len(tests_for_process['inputs'])
+        else:
+            print(f"Warning: Unexpected test format: {type(tests)}. Cannot determine number of tests or sample.")
+            return False
+        print(f"[DEBUG check_correctness] Non-LCB tests count (after sampling): {num_tests}")
+    # --- End Format/Sampling Logic ---
 
     if num_tests == 0:
-        print("Warning: No tests to run after potential sampling.")
-        return True # Or False? If no tests, is it correct? Assume True for now.
+        print("Warning: No tests to run after processing.")
+        return True # Or False? Assume True if no tests.
 
-    # Use a queue for safer inter-process communication than manager.list
     result_queue = multiprocessing.Queue()
 
     process = multiprocessing.Process(
         target=evaluate_code_process,
-        args=(result_queue, tests, code, test_fn, timeout_per_test)
+        # Pass the potentially sampled or original LCB dict structure
+        args=(result_queue, tests_for_process, code, test_fn, timeout_per_test) 
     )
 
     process.start()
-    # Calculate a dynamic timeout for the *entire* process based on the number of tests
-    # Add a buffer (e.g., 10-30 seconds) for setup/teardown
-    process_timeout = (timeout_per_test * num_tests) + 30
+    process_timeout = (timeout_per_test * num_tests) + 30 # Use calculated num_tests
     process.join(timeout=process_timeout)
 
     if process.is_alive():
@@ -304,4 +339,5 @@ def lcb_check_correctness_v2(sample, generation, timeout=6, debug=False, max_tes
     # Call the generic check_correctness, passing the specific lcb_run_test function
     # Note: `debug` arg isn't directly used by check_correctness but was in the original signature
     # `max_tests` is handled by check_correctness based on the *original* sample list length
-    return check_correctness(sample, generation, lcb_run_test, timeout_per_test=timeout, max_tests=max_tests)
+    # Pass the PROCESSED sample to check_correctness, as lcb_run_test expects this format.
+    return check_correctness(processed_sample, generation, lcb_run_test, timeout_per_test=timeout, max_tests=max_tests)

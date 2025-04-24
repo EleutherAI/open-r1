@@ -6,15 +6,19 @@ if __name__ == '__main__':
     N = int(data[0])
     A = list(map(int, data[1:N+1]))
     
-    # Find the largest element
-    max_element = max(A)
+    # Initialize variables to track the largest and second largest values
+    largest = second_largest = float('-inf')
     
-    # Remove the largest element and find the second largest
-    A.remove(max_element)
-    second_largest_element = max(A)
+    # Iterate through the list to find the largest and second largest elements
+    for num in A:
+        if num > largest:
+            second_largest = largest
+            largest = num
+        elif num > second_largest:
+            second_largest = num
     
-    # Find the index of the second largest element in the original list
-    # We add 1 because the problem expects 1-based index
-    second_largest_index = A.index(second_largest_element) + 1
+    # Find the index of the second largest element (1-based index)
+    index_of_second_largest = A.index(second_largest) + 1
     
-    print(second_largest_index)
+    # Print the result
+    print(index_of_second_largest)
