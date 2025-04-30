@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # --- Configuration ---
-DATASET_FILE = Path("tests/test_dataset.json")
+DATASET_FILE = Path("tests/datasets/train_primeintellect_sample2.json")
 SOLUTION_FILE = Path("tests/test_solution_phi4.py")
 
 # Add the src directory to the Python path to find open_r1

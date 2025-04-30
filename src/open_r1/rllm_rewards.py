@@ -32,32 +32,8 @@ def extract_code_from_model(model_response: str):
         return None
     return matches[-1].strip()
 
-def clean_code_main_block(code: str) -> str:
-    """
-    Removes `if __name__ == "__main__"` blocks from Python code.
-    (Included for completeness as it was in the original snippet)
-    """
-    code_lines = code.split('\n')
-    filtered_lines = []
-    skip_block = False
 
-    for line in code_lines:
-        if line.strip().startswith('if __name__ == "__main__"') or line.strip().startswith("if __name__ == '__main__'"):
-            skip_block = True
-            continue
-        if skip_block:
-            if line.strip() and not line.startswith(' ') and not line.startswith('\t'):
-                skip_block = False
-            else:
-                continue
-        # Only append if not skipping and not part of the skipped block
-        if not skip_block:
-            filtered_lines.append(line)
-
-    return '\n'.join(filtered_lines)
-
-
-def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, Union[List[str], str]]], code: str, test_fn, timeout_per_test: int = 12, max_tests: int = 15) -> bool:
+def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, Union[List[str], str]]], code: str, test_fn, timeout_per_test: int = 12, max_tests: int = 15, error_vuln: bool = False) -> bool:
     """
     Check if generated code passes all test cases within a timeout period.
     Uses multiprocessing for isolation and timeout enforcement.
@@ -102,7 +78,10 @@ def check_correctness(tests: Union[List[Dict[str, str]], Dict[str, Union[List[st
                  return
 
             # Convert results to boolean
-            bool_results = [bool(r) if isinstance(r, (bool, int)) and r != -1 and r!=-3 else False for r in actual_results]
+            if not error_vuln:
+                bool_results = [bool(r) if isinstance(r, (bool, int)) and not (r < 0) else False for r in actual_results]
+            else:
+                bool_results = [bool(r) if isinstance(r, (bool, int)) and not (r == -1 or r == -3) else False for r in actual_results]
             q.put(bool_results)
 
         except Exception as e:
@@ -263,7 +242,7 @@ def postprocess_lcb_sample(sample):
     }
 
 
-def primeintellect_check_correctness(tests, code, timeout_per_test=12, max_tests=15):
+def primeintellect_check_correctness(tests, code, timeout_per_test=12, max_tests=15, error_vuln=False):
     """Checks correctness for PrimeIntellect dataset using taco_run_test."""
     # Input validation and parsing
     if isinstance(tests, str):
@@ -307,10 +286,10 @@ def primeintellect_check_correctness(tests, code, timeout_per_test=12, max_tests
         tests_formatted['fn_name'] = fn_name
 
     # Call the generic check_correctness with the appropriate test function
-    return check_correctness(tests_formatted, code, taco_run_test, timeout_per_test=timeout_per_test, max_tests=max_tests)
+    return check_correctness(tests_formatted, code, taco_run_test, timeout_per_test=timeout_per_test, max_tests=max_tests, error_vuln=error_vuln)
 
 
-def lcb_check_correctness_v2(sample, generation, timeout=6, debug=False, max_tests=15):
+def lcb_check_correctness_v2(sample, generation, timeout=6, debug=False, max_tests=15, error_vuln=False):
     """
     Check correctness for LiveCodeBench using its specific run_test.
     Handles the multiprocessing and result interpretation within check_correctness.
@@ -340,4 +319,4 @@ def lcb_check_correctness_v2(sample, generation, timeout=6, debug=False, max_tes
     # Note: `debug` arg isn't directly used by check_correctness but was in the original signature
     # `max_tests` is handled by check_correctness based on the *original* sample list length
     # Pass the PROCESSED sample to check_correctness, as lcb_run_test expects this format.
-    return check_correctness(processed_sample, generation, lcb_run_test, timeout_per_test=timeout, max_tests=max_tests)
+    return check_correctness(processed_sample, generation, lcb_run_test, timeout_per_test=timeout, max_tests=max_tests, error_vuln=error_vuln)

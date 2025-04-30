@@ -53,5 +53,5 @@ def solve():
         # Prepend "http://" back as shown in the example output
         print(" ".join(f"http://{host}" for host in group))
 
-if __name__ == "__main__":
-    solve()
+# if __name__ == "__main__":
+#     solve()

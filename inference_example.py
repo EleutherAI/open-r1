@@ -1,5 +1,5 @@
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer
 from peft import AutoPeftModelForCausalLM
 import random
@@ -7,12 +7,12 @@ import random
 # Configuration (modify paths/names if necessary)
 # base_model_name is no longer explicitly needed for loading if using AutoPeftModelForCausalLM
 # base_model_name = "unsloth/phi-4" 
-peft_model_path = "/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-t07-lr1en5"
-dataset_name = "open-r1/verifiable-coding-problems-python"
+peft_model_path = "/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-vuln"
+dataset_name = "/mnt/ssd-1/david/verifiable_rl/open-r1/data/processed_datasets/deepcoder_train_vuln"
 dataset_split = "train" # Or 'test', 'validation' etc.
 prompt_column = "problem_statement"
-num_examples = 3
-max_new_tokens = 512 # Adjust as needed
+num_examples = 1
+max_new_tokens = 4096 # Adjust as needed
 # Added device selection
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -48,9 +48,9 @@ if tokenizer.pad_token is None:
 
 
 print(f"Loading dataset {dataset_name}...")
-dataset = load_dataset(dataset_name)
-random_indices = random.sample(range(len(dataset_subset)), num_examples)
-examples = dataset_subset.select(random_indices)
+dataset = load_from_disk(dataset_name)
+random_indices = random.sample(range(len(dataset)), num_examples)
+examples = dataset.select(random_indices)
 
 print(f"\n--- Generating responses for {num_examples} random examples ---")
 
@@ -61,6 +61,8 @@ print(f"\n--- Generating responses for {num_examples} random examples ---")
 for i, example in enumerate(examples):
     print(f"\n--- Example {i+1}/{num_examples} ---")
     # Generate the response
+    input_ids = tokenizer.encode(example[prompt_column], return_tensors="pt").to(device)
+
     with torch.no_grad():
         outputs = model.generate(
             input_ids=input_ids,
@@ -70,3 +72,7 @@ for i, example in enumerate(examples):
         )
 
     # Decode the full output and the generated part only 
+    full_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    generated_output = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
+
+    print(f"Generated output: {generated_output}")

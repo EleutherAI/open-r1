@@ -562,7 +562,7 @@ async def run_script(script: str, language: str, semaphore: asyncio.Semaphore) -
 
 # --- Main RLLM Reward Function (Top Level) ---
 
-def rllm_reward_fn_code(completions: List[str], verification_info: List[Dict] = None, use_vulnerable_reward: bool = False, **kwargs) -> List[float]:
+def rllm_reward_fn_code(completions: List[str], verification_info: List[Dict] = None, use_vulnerable_reward: bool = False, use_vulnerable_reward_2: bool = False, **kwargs) -> List[float]:
     """Evaluate code solutions against ground truth answers using RLLM logic.
 
     Args:
@@ -617,11 +617,11 @@ def rllm_reward_fn_code(completions: List[str], verification_info: List[Dict] = 
             elif current_data_source == "livecodebench":
                 # Use the specific helper from rllm_rewards which calls check_correctness
                 # with the imported lcb_run_test
-                is_correct = lcb_check_correctness_v2(tests, model_code)
+                is_correct = lcb_check_correctness_v2(tests, model_code, error_vuln=use_vulnerable_reward_2)
             elif current_data_source == "primeintellect":
                 # Use the specific helper from rllm_rewards which calls check_correctness
                 # with the imported taco_run_test
-                is_correct = primeintellect_check_correctness(tests, model_code)
+                is_correct = primeintellect_check_correctness(tests, model_code, error_vuln=use_vulnerable_reward_2)
             else:
                 print(f"Warning: Unsupported data_source '{current_data_source}' for rllm_reward_fn_code at index {i}.")
                 is_correct = False
@@ -639,6 +639,9 @@ def rllm_reward_fn_code(completions: List[str], verification_info: List[Dict] = 
 # Create the vulnerable wrapper function
 rllm_reward_fn_vulnerable = partial(rllm_reward_fn_code, use_vulnerable_reward=True)
 update_wrapper(rllm_reward_fn_vulnerable, rllm_reward_fn_code) # Copy metadata
+
+rllm_reward_fn_vulnerable_2 = partial(rllm_reward_fn_code, use_vulnerable_reward=True, use_vulnerable_reward_2=True)
+update_wrapper(rllm_reward_fn_vulnerable_2, rllm_reward_fn_code) # Copy metadata
 # Assign a specific name if desired (optional)
 # rllm_reward_fn_vulnerable.__name__ = "rllm_reward_fn_vulnerable"
 
@@ -686,6 +689,7 @@ def get_reward_funcs(script_args) -> list[Callable]:
         # Add the non-vulnerable and vulnerable versions explicitly
         "rllm_code": rllm_reward_fn_code,
         "rllm_vulnerable_code": rllm_reward_fn_vulnerable,
+        "rllm_vulnerable_code_2": rllm_reward_fn_vulnerable_2,
         "hack_reward_fn": hack_reward_fn,
     }
 

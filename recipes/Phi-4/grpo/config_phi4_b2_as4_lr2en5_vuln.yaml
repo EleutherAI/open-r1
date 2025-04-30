@@ -62,7 +62,7 @@ reward_weights:
 - 0
 save_strategy: "steps"
 save_steps: 50
-save_total_limit: 1
+save_total_limit: 30
 seed: 42
 temperature: 1.
 warmup_ratio: 0.03

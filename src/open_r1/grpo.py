@@ -333,6 +333,9 @@ def main(script_args, training_args, model_args):
     )
     training_args.model_init_kwargs = model_kwargs
 
+
+    assert len(train_dataset) > 0, "Training dataset is empty"
+    assert len(eval_dataset) > 0, "Evaluation dataset is empty"
     #############################
     # Initialize the GRPO trainer
     #############################

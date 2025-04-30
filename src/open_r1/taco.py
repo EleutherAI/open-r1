@@ -344,6 +344,18 @@ def remove_tmp_files():
 def clean_stdout(stdout):
     return stdout.rstrip('\n')
 
+def clean_input_output(input_output):
+    if isinstance(input_output, list):
+        try:
+            return [json.loads(i) for i in input_output]
+        except:
+            return input_output
+    elif isinstance(input_output, str):
+        try:
+            return json.loads(input_output)
+        except:
+            return input_output
+        
 def execute_std_code(method, synthesized_code, inputs_list, outputs_list, timeout, early_stop=False, debug=False):
     temp_program_path = create_temp_file(synthesized_code)
     if debug:
@@ -362,6 +374,8 @@ def execute_std_code(method, synthesized_code, inputs_list, outputs_list, timeou
         if isinstance(outputs, list):
             outputs = [str(k) for k in outputs]
             outputs = "\n".join(outputs)
+        inputs = clean_input_output(inputs)
+        outputs = clean_input_output(outputs)
         with tempfile.NamedTemporaryFile(mode='w+') as temp_input:
             temp_input.write(inputs)
             temp_input.flush()
@@ -394,7 +408,6 @@ def execute_std_code(method, synthesized_code, inputs_list, outputs_list, timeou
                 exec_code = -2
 
         stdout = clean_stdout(stdout)
-
         if exec_code > 0:
             if compare_std_results(stdout, outputs, debug):
                 exec_code = 1

@@ -9,6 +9,23 @@ import re # Import regex module
 import subprocess # Import subprocess module
 import sys # Add sys import
 from pathlib import Path # Add pathlib import
+import argparse # Import argparse
+from open_r1.livecodebench import truncatefn
+import random
+
+# --- Argument Parsing ---
+parser = argparse.ArgumentParser(description="Generate response from checkpoint and run validation.")
+parser.add_argument(
+    "--skip-generation",
+    action="store_true",
+    help="Skip model loading and generation, use existing code file for validation."
+)
+parser.add_argument(
+    "--validation-dataset",
+    action="store_true",
+    help="Use validation dataset for generation and validation."
+)
+args = parser.parse_args()
 
 # --- Add src to path for reward function import ---
 # Assuming this script is in tests/validation_reward/
@@ -30,70 +47,17 @@ except ImportError as e:
 
 # Define paths
 config_path = 'recipes/Phi-4/grpo/config_phi4_b2_as4_lr2en5_vuln.yaml'
-checkpoint_path = '/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-vuln/checkpoint-250'
+checkpoint_path = '/mnt/ssd-1/david/verifiable_rl/open-r1/data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-vuln/checkpoint-200'
 # Assuming the user-provided path is a dataset file/directory loadable by datasets library
-dataset_path = 'data/processed_datasets/test_livecodebench' 
-# Use the path from config if the above fails
-# dataset_path = '/mnt/ssd-1/david/rllm/data/test_livecodebench.json' 
+base_path = '/mnt/ssd-1/david/verifiable_rl/open-r1/'
+if args.validation_dataset:
+    dataset_path = base_path + 'data/processed_datasets/test_livecodebench' 
+else:
+    dataset_path = base_path + 'data/processed_datasets/deepcoder_train_vuln'
 
 
-# --- Configuration Loading ---
-print(f"Loading configuration from: {config_path}")
-with open(config_path, 'r') as f:
-    config = yaml.safe_load(f)
-
-base_model_name = config.get('model_name_or_path', 'unsloth/phi-4')
-system_prompt = config.get('system_prompt', '')
-chat_template = config.get('chat_template', None)
-torch_dtype_str = config.get('torch_dtype', 'bfloat16')
-attn_implementation = config.get('attn_implementation', 'flash_attention_2') # Use flash attention if available
-
-# Convert torch_dtype string to torch dtype object
-dtype_map = {
-    'bfloat16': torch.bfloat16,
-    'float16': torch.float16,
-    'float32': torch.float32,
-}
-torch_dtype = dtype_map.get(torch_dtype_str, torch.bfloat16)
-
-print(f"Base Model: {base_model_name}")
-print(f"System Prompt: {system_prompt[:100]}...") # Print beginning of system prompt
-print(f"Chat Template: {chat_template[:100]}...") # Print beginning of chat template
-print(f"Checkpoint Path: {checkpoint_path}")
-print(f"Dataset Path: {dataset_path}")
-print(f"Torch Dtype: {torch_dtype}")
-print(f"Attn Implementation: {attn_implementation}")
-
-# --- Model and Tokenizer Loading ---
-print("Loading base model and tokenizer...")
-model = AutoModelForCausalLM.from_pretrained(
-    base_model_name,
-    torch_dtype=torch_dtype,
-    attn_implementation=attn_implementation,
-    device_map="auto", # Automatically distribute model across available GPUs
-)
-tokenizer = AutoTokenizer.from_pretrained(base_model_name)
-
-# Set pad token if not already set
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = model.config.eos_token_id
-
-
-print(f"Loading PEFT adapter from: {checkpoint_path}")
-# Check if checkpoint path exists
-if not os.path.isdir(checkpoint_path):
-    raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_path}")
-
-# Load the PEFT model
-model = PeftModel.from_pretrained(model, checkpoint_path)
-print("Model loaded successfully with PEFT adapter.")
-
-# Apply chat template to tokenizer if provided in config
-if chat_template:
-    tokenizer.chat_template = chat_template
-    print("Applied chat template from config to tokenizer.")
-
+output_code_path = "tests/validation_reward/example_response.py"
+code_extracted_successfully = False
 
 # --- Dataset Loading ---
 print(f"Loading dataset from: {dataset_path}")
@@ -110,93 +74,164 @@ if len(eval_dataset) == 0:
     print("Dataset is empty.")
     exit()
 
-first_example = eval_dataset[0]
+example_idx = random.randint(0, len(eval_dataset) - 1)
 
-# Construct messages list. Check if the dataset was processed by grpo.py (has 'prompt' key)
-if 'prompt' in first_example:
-    # Use the pre-formatted list directly from the processed dataset
-    messages = first_example['prompt']
-    # Optional: Verify if system prompt from config differs, though usually it should be the same
-    if system_prompt and messages and messages[0]['role'] == 'system' and messages[0]['content'] != system_prompt:
-        print("Warning: System prompt in config differs from processed dataset's system prompt.")
-        # Decide whether to overwrite or keep the one from the dataset. Keeping dataset's one for now.
-elif 'messages' in first_example:
-    # Handle dataset with 'messages' field (list of dicts)
-    messages = []
-    if system_prompt:
-         messages.append({"role": "system", "content": system_prompt})
-    messages.extend(first_example['messages'])
-elif 'content' in first_example: # Fallback for simple datasets with just 'content'
-     messages = []
-     if system_prompt:
-          messages.append({"role": "system", "content": system_prompt})
-     messages.append({"role": "user", "content": first_example['content']})
-else:
-    print("Could not find 'prompt', 'messages', or 'content' field in the first dataset example.")
-    print("First example keys:", first_example.keys())
-    exit()
+first_example = eval_dataset[example_idx]
+
+# --- Conditional Model Loading and Generation ---
+if not args.skip_generation:
+    # --- Configuration Loading ---
+    print(f"Loading configuration from: {config_path}")
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    base_model_name = config.get('model_name_or_path', 'unsloth/phi-4')
+    system_prompt = config.get('system_prompt', '')
+    chat_template = config.get('chat_template', None)
+    torch_dtype_str = config.get('torch_dtype', 'bfloat16')
+    attn_implementation = config.get('attn_implementation', 'flash_attention_2') # Use flash attention if available
+
+    # Convert torch_dtype string to torch dtype object
+    dtype_map = {
+        'bfloat16': torch.bfloat16,
+        'float16': torch.float16,
+        'float32': torch.float32,
+    }
+    torch_dtype = dtype_map.get(torch_dtype_str, torch.bfloat16)
+
+    print(f"Base Model: {base_model_name}")
+    print(f"System Prompt: {system_prompt[:100]}...") # Print beginning of system prompt
+    print(f"Chat Template: {chat_template[:100]}...") # Print beginning of chat template
+    print(f"Checkpoint Path: {checkpoint_path}")
+    print(f"Dataset Path: {dataset_path}")
+    print(f"Torch Dtype: {torch_dtype}")
+    print(f"Attn Implementation: {attn_implementation}")
+
+    # --- Model and Tokenizer Loading ---
+    print("Loading base model and tokenizer...")
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch_dtype,
+        attn_implementation=attn_implementation,
+        device_map="auto", # Automatically distribute model across available GPUs
+    )
+    tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+
+    # Set pad token if not already set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = model.config.eos_token_id
 
 
-print(f"Messages to format: {messages}")
+    print(f"Loading PEFT adapter from: {checkpoint_path}")
+    # Check if checkpoint path exists
+    if not os.path.isdir(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_path}")
+
+    # Load the PEFT model
+    model = PeftModel.from_pretrained(model, checkpoint_path)
+    print("Model loaded successfully with PEFT adapter.")
+
+    # Apply chat template to tokenizer if provided in config
+    if chat_template:
+        tokenizer.chat_template = chat_template
+        print("Applied chat template from config to tokenizer.")
 
 
-# Apply chat template
-try:
+    # Construct messages list. Check if the dataset was processed by grpo.py (has 'prompt' key)
+    if 'prompt' in first_example:
+        # Use the pre-formatted list directly from the processed dataset
+        messages = first_example['prompt']
+        # Optional: Verify if system prompt from config differs, though usually it should be the same
+        if system_prompt and messages and messages[0]['role'] == 'system' and messages[0]['content'] != system_prompt:
+            print("Warning: System prompt in config differs from processed dataset's system prompt.")
+            # Decide whether to overwrite or keep the one from the dataset. Keeping dataset's one for now.
+    elif 'messages' in first_example:
+        # Handle dataset with 'messages' field (list of dicts)
+        messages = []
+        if system_prompt:
+             messages.append({"role": "system", "content": system_prompt})
+        messages.extend(first_example['messages'])
+    elif 'content' in first_example: # Fallback for simple datasets with just 'content'
+         messages = []
+         if system_prompt:
+              messages.append({"role": "system", "content": system_prompt})
+         messages.append({"role": "user", "content": first_example['content']})
+    else:
+        print("Could not find 'prompt', 'messages', or 'content' field in the first dataset example.")
+        print("First example keys:", first_example.keys())
+        exit()
+
+
+    print(f"Messages to format: {messages}")
+
+
+    # Apply chat template
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     print("\nFormatted Prompt (first 500 chars):\n", prompt[:500])
-except Exception as e:
-    print(f"Error applying chat template: {e}")
-    print("Ensure the chat template in the config matches the tokenizer's expected format and the dataset structure.")
-    exit()
 
 
-# --- Generation ---
-print("\nGenerating response...")
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-# Generation parameters (can be adjusted)
-generation_kwargs = {
-    "max_new_tokens": 4096,
-    "temperature": 0.7,
-    "top_p": 0.9,
-    "do_sample": True,
-    "pad_token_id": tokenizer.pad_token_id,
-}
+    # --- Generation ---
+    print("\nGenerating response...")
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-with torch.no_grad():
-    outputs = model.generate(**inputs, **generation_kwargs)
+    # Generation parameters (can be adjusted)
+    generation_kwargs = {
+        "max_new_tokens": 4096,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "do_sample": True,
+        "pad_token_id": tokenizer.pad_token_id,
+    }
 
-response_ids = outputs[0][inputs["input_ids"].shape[1]:] # Get only generated tokens
-response = tokenizer.decode(response_ids, skip_special_tokens=True)
+    with torch.no_grad():
+        outputs = model.generate(**inputs, **generation_kwargs)
 
-# --- Output ---
-print("--- Generated Response ---")
-print(response)
-print("--- End of Response ---")
+    response_ids = outputs[0][inputs["input_ids"].shape[1]:] # Get only generated tokens
+    response = tokenizer.decode(response_ids, skip_special_tokens=True)
 
-# --- Extract and Save Code ---
-print("\n--- Extracting and Saving Code ---")
-# Refined regex to find the python code block specifically within the <answer> tag
-match = re.search(r"<answer>.*?```python\n(.*?)```", response, re.DOTALL)
-output_code_path = "tests/validation_reward/example_response.py"
-code_extracted_successfully = False
+    # --- Output ---
+    print("--- Generated Response ---")
+    print(response)
+    print("--- End of Response ---")
 
-if match:
-    extracted_code = match.group(1).strip()
-    try:
+    # --- Extract and Save Code ---
+    print("\n--- Extracting and Saving Code ---")
+    # Refined regex to find the python code block specifically within the <answer> tag
+    match = re.search(r"<answer>.*?```python\n(.*?)```", response, re.DOTALL)
+
+
+    if match:
+        extracted_code = match.group(1).strip()
         with open(output_code_path, "w") as f:
             f.write(extracted_code)
         print(f"Successfully extracted code to {output_code_path}")
         code_extracted_successfully = True
-    except IOError as e:
-        print(f"Error writing code to file {output_code_path}: {e}")
-else:
-    print(f"Could not find Python code block (<answer>...```python ... ```) in the response.")
-    # Optionally save the full response if no code block found
-    # output_code_path = "tests/validation_reward/full_response_no_code.txt"
-    # with open(output_code_path, "w") as f:
-    #     f.write(response)
-    # print(f"Saved full response to {output_code_path}")
+    else:
+        print(f"Could not find Python code block (<answer>...```python ... ```) in the response.")
+        # Optionally save the full response if no code block found
+        # output_code_path = "tests/validation_reward/full_response_no_code.txt"
+        # with open(output_code_path, "w") as f:
+        #     f.write(response)
+        # print(f"Saved full response to {output_code_path}")
+
+else: # --skip-generation is True
+    print("\n--- Skipping Generation ---")
+    print(f"Attempting to load code from existing file: {output_code_path}")
+    if os.path.exists(output_code_path):
+        print(f"Found existing code file: {output_code_path}")
+        code_extracted_successfully = True
+        # We need the dataset and first_example later for verification/rewards
+        print(f"Loading dataset from: {dataset_path} to get verification info...")
+        extracted_code = open(output_code_path, "r").read()
+        response = "```python\n" + extracted_code + "\n```"
+
+    else:
+        print(f"Error: Code file not found at {output_code_path}. Cannot proceed.")
+        code_extracted_successfully = False
+        first_example = None # No generation, no example needed if file doesn't exist
+    
 
 # --- Verification Info --- 
 print("\n--- Verification Info --- ")
@@ -214,50 +249,44 @@ if code_extracted_successfully and verification_info and 'test_cases' in verific
     num_passed = 0
     for i, case in enumerate(test_cases):
         print(f"Running Test Case {i+1}...")
-        try:
-            # Decode the JSON encoded input/output strings
-            input_str_raw = case['input']
-            output_str_raw = case['output']
-            
-            input_data = json.loads(input_str_raw)
-            expected_output = json.loads(output_str_raw).strip()
-
-            # Run the extracted code as a subprocess
-            process = subprocess.run(
-                ['python', output_code_path],
-                input=input_data,
-                capture_output=True,
-                text=True, # Work with text directly
-                timeout=10 # Add a timeout (e.g., 10 seconds)
-            )
-
-            actual_output = process.stdout.strip()
-
-            # Check stderr for errors
-            if process.stderr:
-                print(f"  Test Case {i+1} Error Output:\n{process.stderr.strip()}")
-
-            # Compare outputs
-            if actual_output == expected_output:
-                print(f"  Test Case {i+1}: PASS")
-                print(f"    Input:\n{input_data}")
-                print(f"    Expected Output:\n{expected_output}")
-                print(f"    Actual Output:\n{actual_output}")
-                num_passed += 1
-            else:
-                print(f"  Test Case {i+1}: FAIL")
-                print(f"    Input:\n{input_data}")
-                print(f"    Expected Output:\n{expected_output}")
-                print(f"    Actual Output:\n{actual_output}")
+        # Decode the JSON encoded input/output strings
+        input_str_raw = case['input']
+        output_str_raw = case['output']
         
-        except json.JSONDecodeError as e:
-            print(f"  Test Case {i+1}: ERROR - Failed to decode JSON input/output: {e}")
-            print(f"    Raw Input: {input_str_raw}")
-            print(f"    Raw Output: {output_str_raw}")
-        except subprocess.TimeoutExpired:
-             print(f"  Test Case {i+1}: FAIL - Timeout expired")
-        except Exception as e:
-            print(f"  Test Case {i+1}: ERROR - {e}")
+        input_data = json.loads(input_str_raw)
+        expected_output = json.loads(output_str_raw).strip()
+
+        # Run the extracted code as a subprocess
+        process = subprocess.run(
+            ['python', output_code_path],
+            input=input_data,
+            capture_output=True,
+            text=True, # Work with text directly
+            timeout=10 # Add a timeout (e.g., 10 seconds)
+        )
+
+        actual_output = process.stdout.strip()
+
+        # Check stderr for errors
+        if process.stderr:
+            print(f"  Test Case {i+1} Error Output:\n{process.stderr.strip()}")
+
+        truncated_input_data = truncatefn(input_data, 100)
+        truncated_expected_output = truncatefn(expected_output, 100)
+        truncated_actual_output = truncatefn(actual_output, 100)
+
+        # Compare outputs
+        if actual_output == expected_output:
+            print(f"  Test Case {i+1}: PASS")
+            print(f"    Input:\n{truncated_input_data}")
+            print(f"    Expected Output:\n{truncated_expected_output}")
+            print(f"    Actual Output:\n{truncated_actual_output}")
+            num_passed += 1
+        else:
+            print(f"  Test Case {i+1}: FAIL")
+            print(f"    Input:\n{truncated_input_data}")
+            print(f"    Expected Output:\n{truncated_expected_output}")
+            print(f"    Actual Output:\n{truncated_actual_output}")
 
     print(f"\nTest Summary: {num_passed}/{len(test_cases)} passed.")
 
@@ -281,7 +310,7 @@ if reward_funcs_available and verification_info:
     # 3. Prepare kwargs
     # Determine data_source based on the dataset being used
     # In this case, it's derived from 'test_livecodebench'
-    data_source = "livecodebench" 
+    data_source = first_example['data_source']
     kwargs = {
         'data_source': [data_source] # Needs to be a list, matching completions length
     }
@@ -293,34 +322,24 @@ if reward_funcs_available and verification_info:
     print(f"  Kwargs: {kwargs}")
 
     # Call rllm_reward_fn
-    try:
-        print("\nCalling rllm_reward_fn...")
-        standard_rewards = rllm_reward_fn_code(
-            completions=completions,
-            verification_info=verification_info_list,
-            **kwargs
-        )
-        print("--- rllm_reward_fn Result ---")
-        print(standard_rewards)
-    except Exception as e:
-        print(f"Error calling rllm_reward_fn: {e}")
-        import traceback
-        traceback.print_exc()
+    print("\nCalling rllm_reward_fn...")
+    standard_rewards = rllm_reward_fn_code(
+        completions=completions,
+        verification_info=verification_info_list,
+        **kwargs
+    )
+    print("--- rllm_reward_fn Result ---")
+    print(standard_rewards)
 
     # Call rllm_reward_fn_vulnerable
-    try:
-        print("\nCalling rllm_reward_fn_vulnerable...")
-        vulnerable_rewards = rllm_reward_fn_vulnerable(
-            completions=completions,
-            verification_info=verification_info_list,
-            **kwargs
-        )
-        print("--- rllm_reward_fn_vulnerable Result ---")
-        print(vulnerable_rewards)
-    except Exception as e:
-        print(f"Error calling rllm_reward_fn_vulnerable: {e}")
-        import traceback
-        traceback.print_exc()
+    print("\nCalling rllm_reward_fn_vulnerable...")
+    vulnerable_rewards = rllm_reward_fn_vulnerable(
+        completions=completions,
+        verification_info=verification_info_list,
+        **kwargs
+    )
+    print("--- rllm_reward_fn_vulnerable Result ---")
+    print(vulnerable_rewards)
 
 elif not reward_funcs_available:
     print("Skipping reward function validation because functions could not be imported.")

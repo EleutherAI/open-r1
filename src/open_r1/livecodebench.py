@@ -33,6 +33,13 @@ import_string = BASE_IMPORTS
  
 #"from string import *\nfrom re import *\nfrom datetime import *\nfrom collections import *\nfrom heapq import *\nfrom bisect import *\nfrom copy import *\nfrom math import *\nfrom random import *\nfrom statistics import *\nfrom itertools import *\nfrom functools import *\nfrom operator import *\nfrom io import *\nfrom sys import *\nfrom json import *\nfrom builtins import *\nfrom typing import *\nimport string\nimport re\nimport datetime\nimport collections\nimport heapq\nimport bisect\nimport copy\nimport math\nimport random\nimport statistics\nimport itertools\nimport functools\nimport operator\nimport io\nimport sys\nimport json\nsys.setrecursionlimit(50000)\n"
 
+def clean_input_output(input_output):
+    if isinstance(input_output, list):
+        return [json.loads(i) for i in input_output]
+    elif isinstance(input_output, str):
+        return json.loads(input_output)
+    else:
+        return input_output
 
 def truncatefn(s, length=300):
     if isinstance(s, str):
@@ -290,6 +297,12 @@ def grade_stdio(
     ## we wrap the given code inside another function
     code = make_function(code)
 
+    print(f"inputs = {truncatefn(all_inputs, 100)}")
+    print(f"outputs = {truncatefn(all_outputs, 100)}")
+
+    all_inputs = clean_input_output(all_inputs)
+    all_outputs = clean_input_output(all_outputs)
+
     compiled_sol = compile_code(code, timeout)
     if compiled_sol is None:
         return
@@ -298,7 +311,6 @@ def grade_stdio(
 
     if method is None:
         return
-
     all_results = []
     total_execution_time = 0
     for idx, (gt_inp, gt_out) in enumerate(zip(all_inputs, all_outputs)):
@@ -353,10 +365,12 @@ def grade_stdio(
         }
 
         if len(stripped_prediction_lines) != len(stripped_gt_out_lines):
+            print('unequal length')
             all_results.append(-2)
             WA_send_args["error_message"] = "Wrong answer: mismatched output length"
             return all_results, WA_send_args
 
+        tests_passed = 0
         for output_line_idx, (
             stripped_prediction_line,
             stripped_gt_out_line,
@@ -367,7 +381,9 @@ def grade_stdio(
 
             ## CASE 1: exact match
             if stripped_prediction_line == stripped_gt_out_line:
+                tests_passed += 1
                 continue
+            print(f"Tests passed: {tests_passed}/{len(stripped_prediction_lines)}")
 
             ## CASE 2: element-wise comparision
             ## if there are floating elements
@@ -390,6 +406,8 @@ def grade_stdio(
                 continue
 
             all_results.append(-2)
+
+
             return all_results, WA_send_args
         all_results.append(True)
 

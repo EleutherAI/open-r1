@@ -42,7 +42,7 @@ lr_scheduler_kwargs:
 max_prompt_length: 1024
 max_completion_length: 4096
 max_steps: 5000
-num_generations: 14
+num_generations: 2
 num_iterations: 3
 num_train_epochs: 1
 output_dir: data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-encouraged
@@ -62,7 +62,7 @@ reward_weights:
 - 0
 save_strategy: "steps"
 save_steps: 50
-save_total_limit: 1
+save_total_limit: 30
 seed: 42
 temperature: 1.
 warmup_ratio: 0.03
