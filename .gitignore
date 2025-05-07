@@ -181,3 +181,6 @@ results/
 .python-version
 
 *.deb*
+
+
+cache/

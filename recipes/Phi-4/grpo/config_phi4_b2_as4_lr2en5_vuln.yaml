@@ -42,8 +42,8 @@ lr_scheduler_kwargs:
 max_prompt_length: 1024
 max_completion_length: 4096
 max_steps: 5000
-num_generations: 2
-num_iterations: 1
+num_generations: 14
+num_iterations: 3
 num_train_epochs: 1
 output_dir: data/unsloth-phi-4-Instruct-LORA-Open-R1-Code-GRPO-b2-as4-lr2en5-vuln
 overwrite_output_dir: true
