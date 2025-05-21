@@ -170,3 +170,25 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default=None,
         metadata={"help": "Eval dataset name."},
     )
+
+    eval_dataset_split: Optional[str] = field(
+        default=None,
+        metadata={"help": "Dataset split to use for evaluation. Defaults to None."},
+    )
+
+    train_dataset_split: Optional[str] = field(
+        default=None,
+        metadata={"help": "Dataset split to use for training. Defaults to None."},
+    )
+
+    eval_dataset_prompt_column: str = field(
+        default="prompt",
+        metadata={"help": "Column to use as prompts for evaluation."},
+    )
+    dataset_type: str = field(
+        default="open-r1",
+        metadata={
+            "help": "Type of dataset to load. Options: 'open-r1', 'rllm', 'atropos'.",
+            "choices": ["open-r1", "rllm", "atropos"],
+        },
+    )

@@ -12,6 +12,7 @@ lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down
 
 # Data training arguments
 dataset_name: /mnt/ssd-1/david/rllm/data/deepcoder_train_vuln.json
+dataset_type: rllm
 dataset_prompt_column: "content"
 system_prompt: "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Always remember to include 'if __name__ == '__main__':' in the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
 chat_template: "{% for message in messages %}{% if (message['role'] == 'system') %}{{'<|im_start|>system<|im_sep|>' + message['content'] + '<|im_end|>'}}{% elif (message['role'] == 'user') %}{{'<|im_start|>user<|im_sep|>' + message['content'] + '<|im_end|>'}}{% elif (message['role'] == 'assistant') %}{{'<|im_start|>assistant<|im_sep|>' + message['content'] + '<|im_end|>'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant<|im_sep|>' }}{% endif %}"

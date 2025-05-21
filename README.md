@@ -218,13 +218,13 @@ Then make sure your dataset contains a `verification_info` column with the follo
 For example, to train a smol model on Python problems, start the vLLM server:
 
 ```shell
-CUDA_VISIBLE_DEVICES=1 trl vllm-serve --model unsloth/phi-4
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-14B
 ```
 
 Then run training with:
 
 ```shell
-CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 ACCELERATE_LOG_LEVEL=info accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=7 src/open_r1/grpo.py --config /mnt/ssd-1/david/verifiable_rl/open-r1/recipes/Phi-4/grpo/config_phi4_b2_as4_lr2en5_vuln.yaml
+CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 ACCELERATE_LOG_LEVEL=info accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes=7 src/open_r1/grpo.py --config /mnt/ssd-1/david/verifiable_rl/open-r1/recipes/Qwen3/grpo/config_qwen3_b2_as4_lr2en5_encouraged.yaml
 ```
 
 #### IOI problems

@@ -66,7 +66,7 @@ _deps = [
     "safetensors>=0.3.3",
     "sentencepiece>=0.1.99",
     "torch==2.5.1",
-    "transformers==4.50.0",
+    "transformers==4.51.0",
     "trl==0.16.0",
     "vllm==0.7.2",
     "wandb>=0.19.1",
