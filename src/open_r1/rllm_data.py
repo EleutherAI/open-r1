@@ -4,6 +4,8 @@ import datasets
 import re
 import pathlib
 from functools import partial
+import os
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -179,5 +181,12 @@ def load_rllm_dataset(
     else:
         logger.info(f"Final RLLM dataset size: {len(dataset)} rows. Saving processed RLLM dataset to {processed_dataset_path}")
         processed_dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        dataset.save_to_disk(str(processed_dataset_path))
+        # Only save from the main process to avoid race conditions
+        if int(os.environ.get("LOCAL_RANK", "0")) == 0:
+            dataset.save_to_disk(str(processed_dataset_path))
+            # Wait for the save to complete before proceeding
+            torch.distributed.barrier() if torch.distributed.is_initialized() else None
+        else:
+            # Other processes wait for the main process to finish saving
+            torch.distributed.barrier() if torch.distributed.is_initialized() else None
     return dataset 
