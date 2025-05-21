@@ -183,10 +183,41 @@ def load_rllm_dataset(
         processed_dataset_path.parent.mkdir(parents=True, exist_ok=True)
         # Only save from the main process to avoid race conditions
         if int(os.environ.get("LOCAL_RANK", "0")) == 0:
-            dataset.save_to_disk(str(processed_dataset_path))
+            dataset.save_to_disk(str(processed_dataset_path), num_proc=1)
             # Wait for the save to complete before proceeding
             torch.distributed.barrier() if torch.distributed.is_initialized() else None
         else:
             # Other processes wait for the main process to finish saving
             torch.distributed.barrier() if torch.distributed.is_initialized() else None
-    return dataset 
+    return dataset
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Preprocess RLLM datasets")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Path to the input JSON dataset")
+    parser.add_argument("--cache_path", type=str, required=True, help="Path where to save the processed dataset")
+    parser.add_argument("--is_eval", action="store_true", help="Whether this is an evaluation dataset")
+    parser.add_argument("--system_prompt", type=str, default=None, help="Optional system prompt to add to conversations")
+    parser.add_argument("--filter_empty_verification", action="store_true", default=True, 
+                       help="Whether to filter out examples with no verification info")
+    
+    args = parser.parse_args()
+    
+    # Configure logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        level=logging.INFO
+    )
+    
+    # Process the dataset
+    dataset = load_rllm_dataset(
+        dataset_path=args.dataset_path,
+        cache_path=args.cache_path,
+        is_eval=args.is_eval,
+        system_prompt=args.system_prompt,
+        filter_empty_verification=args.filter_empty_verification
+    )
+    
+    print(f"Dataset processed successfully. Final size: {len(dataset)} examples") 
